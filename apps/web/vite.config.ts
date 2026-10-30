@@ -246,12 +246,12 @@ function chunkCycleGuardPlugin(): Plugin {
   };
 }
 
-// Allow Tailnet hosts for sharing; Tailscale-controlled DNS prevents attacker rebinding.
+// Allow Tailnet and dev tunnel hosts for sharing; their provider-controlled DNS prevents rebinding.
 const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);
-const allowedHosts = [".ts.net", ...configuredAllowedHosts];
+const allowedHosts = [".ts.net", ".devtunnels.ms", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {

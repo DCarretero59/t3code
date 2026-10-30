@@ -128,6 +128,7 @@ import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
 import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
+import * as DevTunnel from "./environment/DevTunnel.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as AuthHttp from "./auth/http.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
@@ -703,6 +704,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer),
+  Layer.provideMerge(DevTunnel.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
 );
@@ -875,6 +877,25 @@ const layerMakeServer = Layer.unwrap(
                   )
                 : Effect.void,
           ),
+        )
+      : Layer.empty;
+    const layerDevTunnel = config.devTunnelEnabled
+      ? Layer.effectDiscard(
+          Effect.gen(function* () {
+            const devTunnel = yield* DevTunnel.DevTunnel;
+            const server = yield* HttpServer.HttpServer;
+            yield* awaitActivation.pipe(
+              Effect.andThen(
+                Effect.suspend(() => {
+                  const address = server.address;
+                  return typeof address === "string" || !("port" in address)
+                    ? Effect.void
+                    : devTunnel.run(DevTunnel.devTunnelTargetPort(config, address.port));
+                }),
+              ),
+              Effect.forkScoped,
+            );
+          }),
         )
       : Layer.empty;
     const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
@@ -1084,6 +1105,7 @@ const layerMakeServer = Layer.unwrap(
       layerHttpListening,
       layerRuntimeState.pipe(Layer.provide(layerLauncher)),
       layerTailscaleServe,
+      layerDevTunnel,
       layerCloudDesiredLinkReconcile,
       HeapSnapshot.layer,
     );

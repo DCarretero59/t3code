@@ -324,6 +324,12 @@ export const GROK_MODEL_SELECTION = {
   model: "grok-build",
 } satisfies ModelSelection;
 
+/** Copilot's cheapest premium model; recordings spend real premium requests. */
+export const COPILOT_MODEL_SELECTION = {
+  instanceId: ProviderInstanceId.make("copilot"),
+  model: "claude-haiku-4.5",
+} satisfies ModelSelection;
+
 /** fx fixtures run on fx's Default; the replay adapter has no probed model, so it writes none. */
 export const FX_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("fx"),
