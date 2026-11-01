@@ -56,7 +56,9 @@ it("lists Auto first and keeps each model's own reasoning efforts", () => {
     ["auto", true],
     ["gpt-5.6-luna", false],
   ]);
-  const effort = snapshot.models[1]?.capabilities?.optionDescriptors?.[0];
+  const effort = snapshot.models[1]?.capabilities?.optionDescriptors?.find(
+    (option) => option.id === "reasoningEffort",
+  );
   expect(effort?.type === "select" ? effort.options.map((option) => option.id) : []).toEqual([
     "low",
     "medium",

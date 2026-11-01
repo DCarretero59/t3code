@@ -19,6 +19,7 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 import type { CopilotSettings } from "../settings.ts";
 import { COPILOT_DRIVER_KIND, type CopilotRuntimeProbe, type CopilotSdkError } from "./sdk.ts";
+import { copilotControlDescriptors } from "./controls.ts";
 
 /** Copilot's own routing model; a real model id, so "Default" never needs a sentinel. */
 export const COPILOT_DEFAULT_MODEL = "auto";
@@ -43,7 +44,9 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
   max: "Max",
 };
 
-const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
+const EMPTY_CAPABILITIES = createModelCapabilities({
+  optionDescriptors: copilotControlDescriptors([]),
+});
 
 function copilotModelCapabilities(
   model: Pick<ModelInfo, "supportedReasoningEfforts" | "defaultReasoningEffort">,
@@ -56,6 +59,7 @@ function copilotModelCapabilities(
     : undefined;
   return createModelCapabilities({
     optionDescriptors: [
+      ...copilotControlDescriptors([]),
       {
         id: COPILOT_REASONING_EFFORT_OPTION,
         label: "Reasoning",
@@ -123,7 +127,7 @@ const snapshot = (
     models: copilotModels(settings, listed),
     probe,
   }),
-  supportsTextGeneration: false,
+  supportsTextGeneration: true,
 });
 
 export const buildInitialCopilotProviderSnapshot = (

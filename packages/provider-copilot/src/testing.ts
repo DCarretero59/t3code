@@ -9,6 +9,7 @@ export {
   CopilotSdkError,
   loggedSessionOptions,
   makeCopilotSdkRunner,
+  resolveCopilotBinary,
   sendFrame,
   type CopilotSdkConnection,
   type CopilotSdkFrame,

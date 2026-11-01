@@ -40,6 +40,17 @@ export type CopilotUserInputRequest = Parameters<UserInputHandler>[0];
 export type CopilotUserInputResponse = Awaited<ReturnType<UserInputHandler>>;
 /** Models also report "none", which the SDK's `ReasoningEffort` type predates. */
 export type CopilotReasoningEffort = ReasoningEffort | "none";
+export type CopilotSessionMode = "interactive" | "plan" | "autopilot";
+export interface CopilotSessionControls {
+  readonly mode: CopilotSessionMode;
+  readonly agent: string | null;
+}
+
+export function isCopilotReasoningEffort(
+  value: string | undefined,
+): value is CopilotReasoningEffort {
+  return value !== undefined && ["none", "low", "medium", "high", "xhigh", "max"].includes(value);
+}
 
 export type CopilotSendAttachment = {
   readonly type: "file";
@@ -55,6 +66,9 @@ export interface CopilotSdkSessionOptions {
   readonly systemMessage?: string;
   /** Full access hands every permission to the SDK's `approveAll`; otherwise T3 answers them. */
   readonly approveAll: boolean;
+  readonly availableTools?: ReadonlyArray<string>;
+  readonly denyPermissions?: boolean;
+  readonly enableConfigDiscovery?: boolean;
 }
 
 /** Values the transcript keeps; MCP credentials and the system prompt stay out of it. */
@@ -82,6 +96,7 @@ export type CopilotSdkOutboundFrame =
     }
   | { readonly type: "session.abort" }
   | { readonly type: "session.setModel"; readonly model: string; readonly reasoningEffort?: string }
+  | { readonly type: "session.setControls"; readonly controls: CopilotSessionControls }
   | {
       readonly type: "permission.respond";
       readonly requestId: string;
@@ -133,6 +148,15 @@ export interface CopilotSdkSession {
     readonly model: string;
     readonly reasoningEffort?: CopilotReasoningEffort;
   }) => Effect.Effect<void, CopilotSdkError>;
+  readonly getControls: Effect.Effect<
+    {
+      readonly mode: CopilotSessionMode;
+      readonly agent: string | null;
+      readonly agents: ReadonlyArray<{ readonly name: string; readonly displayName: string }>;
+    },
+    CopilotSdkError
+  >;
+  readonly setControls: (input: CopilotSessionControls) => Effect.Effect<void, CopilotSdkError>;
   readonly respondToPermission: (input: {
     readonly requestId: string;
     readonly result: PermissionRequestResult;
@@ -239,7 +263,27 @@ export const resolveCopilotBinary = Effect.fn("resolveCopilotBinary")(function* 
     },
   );
   if (resolved === null) return yield* new CopilotBinaryNotFoundError({ binaryPath });
-  return npmShimExecutable(resolved) ?? resolved;
+  const executable = npmShimExecutable(resolved);
+  if (executable !== undefined) return executable;
+  const path = yield* Path.Path;
+  if (path.extname(resolved).toLowerCase() !== ".cmd") return resolved;
+  const fs = yield* FileSystem.FileSystem;
+  const shim = yield* fs.readFileString(resolved);
+  const command = shim.trimEnd().split(/\r?\n/).at(-1);
+  const npmLoaderCommand =
+    /^endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%" {1,2}"%dp0%\\node_modules\\@github\\copilot\\npm-loader\.js" %\*$/;
+  if (command === undefined || !npmLoaderCommand.test(command)) return resolved;
+  const loader = path.join(
+    path.dirname(resolved),
+    "node_modules",
+    "@github",
+    "copilot",
+    "npm-loader.js",
+  );
+  if (!(yield* fs.exists(loader))) {
+    return yield* new CopilotBinaryNotFoundError({ binaryPath: loader });
+  }
+  return loader;
 });
 
 /** Spawns the user's `copilot` over stdio; the SDK's bundled runtime is never used. */
@@ -334,6 +378,11 @@ export const makeCopilotSdkRunner = Effect.fn("makeCopilotSdkRunner")(function* 
               : { reasoningEffort: open.options.reasoningEffort as ReasoningEffort }),
             workingDirectory: open.options.workingDirectory,
             streaming: true,
+            enableConfigDiscovery: open.options.enableConfigDiscovery ?? true,
+            ...(open.options.denyPermissions ? { enableFileHooks: false } : {}),
+            ...(open.options.availableTools === undefined
+              ? {}
+              : { availableTools: [...open.options.availableTools] }),
             mcpServers: { ...open.options.mcpServers },
             ...(open.options.systemMessage === undefined
               ? {}
@@ -342,9 +391,11 @@ export const makeCopilotSdkRunner = Effect.fn("makeCopilotSdkRunner")(function* 
                 }),
             // "no-result" leaves the request pending for the pending-permission RPC, which keeps
             // Copilot's own request ids and completion events.
-            onPermissionRequest: open.options.approveAll
-              ? sdk.approveAll
-              : () => ({ kind: "no-result" as const }),
+            onPermissionRequest: open.options.denyPermissions
+              ? () => ({ kind: "denied-interactively-by-user" as const })
+              : open.options.approveAll
+                ? sdk.approveAll
+                : () => ({ kind: "no-result" as const }),
             onUserInputRequest: (request: CopilotUserInputRequest) => {
               userInputOrdinal += 1;
               const requestId = `user-input-${userInputOrdinal}`;
@@ -417,6 +468,45 @@ export const makeCopilotSdkRunner = Effect.fn("makeCopilotSdkRunner")(function* 
                     : { reasoningEffort: model.reasoningEffort as ReasoningEffort },
                 ),
               );
+            },
+            getControls: call("session.getControls", async () => {
+              const mode = await session.rpc.mode.get();
+              const { agents } = await session.rpc.agent.list();
+              const current = await session.rpc.agent.getCurrent();
+              return { mode, agent: current.agent?.name ?? null, agents };
+            }),
+            setControls: (controls) => {
+              outbound({ type: "session.setControls", controls });
+              return call("session.setControls", async () => {
+                try {
+                  if (controls.agent === null) {
+                    await session.rpc.agent.deselect();
+                  } else {
+                    const selected = await session.rpc.agent.select({ name: controls.agent });
+                    if (selected.agent.name !== controls.agent) {
+                      throw new Error("Copilot did not select the requested agent.");
+                    }
+                  }
+                  const changed = await session.rpc.mode.set({ mode: controls.mode });
+                  if (
+                    changed.modeApplied === false ||
+                    changed.deferImplementation === true ||
+                    changed.confirmation != null
+                  ) {
+                    throw new Error("Copilot requires confirmation before applying this mode.");
+                  }
+                  if ((await session.rpc.mode.get()) !== controls.mode) {
+                    throw new Error("Copilot did not apply the requested interaction mode.");
+                  }
+                } finally {
+                  // Autopilot can change permission policy; T3's handler remains authoritative.
+                  const restored = await session.rpc.permissions.setMode({ mode: "manual" });
+                  const permissions = await session.rpc.permissions.getMode();
+                  if (!restored.success || permissions.mode !== "manual") {
+                    throw new Error("Copilot did not restore host-managed tool permissions.");
+                  }
+                }
+              });
             },
             respondToPermission: (response) => {
               outbound({
