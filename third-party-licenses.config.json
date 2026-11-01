@@ -20,6 +20,18 @@
       ]
     },
     {
+      "bundles": ["desktop", "mobile", "web"],
+      "license": "MIT",
+      "name": "Primer Octicons (GitHub Copilot icon)",
+      "sourceUrl": "https://github.com/primer/octicons",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2026 GitHub Inc."]
+        }
+      ]
+    },
+    {
       "bundles": ["assets", "desktop", "web"],
       "license": "CC0-1.0",
       "name": "Notification Sound 1 by deadrobotmusic",
@@ -229,6 +241,15 @@
     }
   ],
   "packageOverrides": [
+    {
+      "name": "@github/copilot-sdk",
+      "license": "MIT",
+      "sourceUrl": "https://github.com/github/copilot-sdk",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright GitHub, Inc."]
+      }
+    },
     {
       "name": "entities",
       "version": "8.1.0",

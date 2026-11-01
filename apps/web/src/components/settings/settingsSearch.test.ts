@@ -136,6 +136,7 @@ describe("searchSettings", () => {
       "t3-connect",
       "hold-webhooks-while-offline",
       "tailscale-https",
+      "dev-tunnel",
       "wsl-backend",
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-10-28T08:10:39Z",
+  "updatedAt": "2026-10-30T06:30:00Z",
   "compatibility": [
     {
       "driver": "codex",
@@ -107,6 +107,15 @@
       "ranges": [
         { "range": ">=0.0.13", "status": "supported" },
         { "range": "<0.0.13", "status": "unsupported" }
+      ]
+    },
+    {
+      "driver": "copilot",
+      "t3CodeRange": ">=0.0.46",
+      "recommendedRange": ">=1.0.105",
+      "ranges": [
+        { "range": ">=1.0.69", "status": "supported" },
+        { "range": "<1.0.69", "status": "unknown" }
       ]
     }
   ],

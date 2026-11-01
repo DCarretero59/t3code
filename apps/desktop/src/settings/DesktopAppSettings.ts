@@ -33,6 +33,7 @@ export interface DesktopSettings {
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly devTunnelEnabled: boolean;
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
   readonly wslBackendEnabled: boolean;
@@ -71,6 +72,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
+  devTunnelEnabled: false,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
   wslBackendEnabled: false,
@@ -93,6 +95,7 @@ const DesktopSettingsDocument = Schema.Struct({
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
+  devTunnelEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   wslBackendEnabled: Schema.optionalKey(Schema.Boolean),
@@ -157,6 +160,9 @@ export class DesktopAppSettings extends Context.Service<
       readonly enabled: boolean;
       readonly port: Option.Option<number>;
     }) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setDevTunnelEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setUpdateChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
@@ -223,6 +229,7 @@ function normalizeDesktopSettingsDocument(
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
+    devTunnelEnabled: parsed.devTunnelEnabled === true,
     updateChannel: updateChannelConfiguredByUser
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
@@ -260,6 +267,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.tailscaleServePort !== defaults.tailscaleServePort) {
     document.tailscaleServePort = settings.tailscaleServePort;
+  }
+  if (settings.devTunnelEnabled !== defaults.devTunnelEnabled) {
+    document.devTunnelEnabled = settings.devTunnelEnabled;
   }
   if (settings.updateChannel !== defaults.updateChannel) {
     document.updateChannel = settings.updateChannel;
@@ -323,6 +333,12 @@ function setTailscaleServe(
         tailscaleServeEnabled: input.enabled,
         tailscaleServePort: port,
       };
+}
+
+function setDevTunnelEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.devTunnelEnabled === enabled
+    ? settings
+    : { ...settings, devTunnelEnabled: enabled };
 }
 
 function setUpdateChannel(
@@ -544,6 +560,11 @@ export const make = Effect.gen(function* () {
 
       return yield* persist((settings) => setTailscaleServe(settings, input));
     }),
+    setDevTunnelEnabled: Effect.fn("desktop.settings.setDevTunnelEnabled")(function* (enabled) {
+      yield* Effect.annotateCurrentSpan({ enabled });
+
+      return yield* persist((settings) => setDevTunnelEnabled(settings, enabled));
+    }),
     setUpdateChannel: Effect.fn("desktop.settings.setUpdateChannel")(function* (channel) {
       yield* Effect.annotateCurrentSpan({ channel });
 
@@ -615,6 +636,11 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setTailscaleServe: Effect.fn("DesktopAppSettings.setTailscaleServe")(function (input) {
           return update((settings) => setTailscaleServe(settings, input));
         }),
+        setDevTunnelEnabled: Effect.fn("DesktopAppSettings.setDevTunnelEnabled")(
+          function (enabled) {
+            return update((settings) => setDevTunnelEnabled(settings, enabled));
+          },
+        ),
         setUpdateChannel: Effect.fn("DesktopAppSettings.setUpdateChannel")(function (channel) {
           return update((settings) => setUpdateChannel(settings, channel));
         }),

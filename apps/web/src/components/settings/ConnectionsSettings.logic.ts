@@ -372,6 +372,10 @@ export function isTailscaleHttpsEndpoint(endpoint: AdvertisedEndpoint): boolean 
   return endpoint.id.startsWith("tailscale-magicdns:");
 }
 
+export function isDevTunnelEndpoint(endpoint: AdvertisedEndpoint): boolean {
+  return endpoint.id.startsWith("devtunnel:");
+}
+
 export function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   if (endpoint.id.startsWith("desktop-loopback:")) {
     return "desktop-core:loopback:http";

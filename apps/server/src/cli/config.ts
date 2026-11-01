@@ -91,6 +91,12 @@ const lanFlag = Flag.Boolean("lan").pipe(
   ),
   Flag.optional,
 );
+const devTunnelFlag = Flag.Boolean("devtunnel").pipe(
+  Flag.withDescription(
+    "Publish this backend over a Microsoft dev tunnel. Requires the devtunnel CLI, signed in.",
+  ),
+  Flag.optional,
+);
 
 export const traceFileConfig = Config.String("T3CODE_TRACE_FILE").pipe(
   Config.option,
@@ -172,6 +178,10 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   lan: Config.Boolean("T3CODE_LAN").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  devTunnelEnabled: Config.Boolean("T3CODE_DEVTUNNEL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 const DevAuthTokenConfig = Config.Redacted("T3CODE_DEV_AUTH_TOKEN").pipe(
@@ -208,6 +218,7 @@ export interface CliServerFlags {
   readonly tailscaleServeEnabled: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
   readonly lan: Option.Option<boolean>;
+  readonly devTunnelEnabled: Option.Option<boolean>;
 }
 
 export interface CliAuthLocationFlags {
@@ -243,6 +254,7 @@ export const sharedServerCommandFlags = {
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
   lan: lanFlag,
+  devTunnelEnabled: devTunnelFlag,
 } as const;
 
 const resolveOptionPrecedence = <Value>(
@@ -287,6 +299,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
     tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
     lan: flags.lan ?? Option.none(),
+    devTunnelEnabled: flags.devTunnelEnabled ?? Option.none(),
   } satisfies CliServerFlags;
   const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
   const bootstrapEnvelope =
@@ -414,6 +427,14 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     ),
     () => 443,
   );
+  const devTunnelEnabled = Option.getOrElse(
+    resolveOptionPrecedence(
+      normalizedFlags.devTunnelEnabled,
+      Option.fromUndefinedOr(env.devTunnelEnabled),
+      Option.fromUndefinedOr(bootstrap?.devTunnelEnabled),
+    ),
+    () => false,
+  );
   const staticDir = devUrl ? undefined : yield* ServerConfig.resolveStaticDir();
   const explicitHost = resolveOptionPrecedence(
     normalizedFlags.host,
@@ -519,6 +540,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     logWebSocketEvents,
     tailscaleServeEnabled,
     tailscaleServePort,
+    ...(devTunnelEnabled ? { devTunnelEnabled } : {}),
   };
 
   return config;
@@ -544,6 +566,7 @@ export const resolveCliAuthConfig = (
       tailscaleServeEnabled: Option.none(),
       tailscaleServePort: Option.none(),
       lan: Option.none(),
+      devTunnelEnabled: Option.none(),
     },
     cliLogLevel,
   );

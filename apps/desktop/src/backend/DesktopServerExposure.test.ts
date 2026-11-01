@@ -209,6 +209,7 @@ describe("DesktopServerExposure", () => {
           advertisedHost: "192.168.1.20",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          devTunnelEnabled: false,
         });
 
         const backendConfig = yield* serverExposure.backendConfig;
@@ -296,6 +297,64 @@ describe("DesktopServerExposure", () => {
       }),
     ),
   );
+
+  it.effect("advertises the backend's dev tunnel URL only while the tunnel is enabled", () => {
+    let statusReads = 0;
+    return withHarness(
+      emptyNetworkInterfaces,
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const statePath = `${environment.stateDir}/devtunnel.json`;
+        const advertisedUrls = serverExposure.getAdvertisedEndpoints.pipe(
+          Effect.map((endpoints) => endpoints.map((endpoint) => endpoint.httpBaseUrl)),
+        );
+
+        yield* settings.load;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+        yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
+        yield* fileSystem.writeFileString(statePath, `{"tunnelId":"t3-desk.usw2"}\n`);
+
+        const enabled = yield* serverExposure.setDevTunnelEnabled(true);
+        assert.equal(enabled.requiresRelaunch, true);
+        assert.equal(enabled.state.devTunnelEnabled, true);
+        assert.equal((yield* serverExposure.backendConfig).devTunnelEnabled, true);
+        assert.equal((yield* settings.load).devTunnelEnabled, true);
+        assert.deepEqual(yield* advertisedUrls, ["http://127.0.0.1:4173/"]);
+
+        yield* fileSystem.writeFileString(
+          statePath,
+          `{"tunnelId":"t3-desk.usw2","url":"https://t3-desk-4173.usw2.devtunnels.ms"}\n`,
+        );
+        const endpoints = yield* serverExposure.getAdvertisedEndpoints;
+        assert.deepEqual(
+          endpoints.map((endpoint) => [
+            endpoint.provider.id,
+            endpoint.httpBaseUrl,
+            endpoint.status,
+          ]),
+          [
+            ["desktop-core", "http://127.0.0.1:4173/", "available"],
+            ["devtunnel", "https://t3-desk-4173.usw2.devtunnels.ms/", "available"],
+          ],
+        );
+        assert.equal(endpoints[1]!.compatibility.hostedHttpsApp, "compatible");
+
+        const disabled = yield* serverExposure.setDevTunnelEnabled(false);
+        assert.equal(disabled.requiresRelaunch, true);
+        assert.equal(disabled.state.devTunnelEnabled, false);
+        assert.equal((yield* serverExposure.backendConfig).devTunnelEnabled, false);
+        assert.deepEqual(yield* advertisedUrls, ["http://127.0.0.1:4173/"]);
+        assert.equal(statusReads, 0);
+      }),
+      {},
+      layerMockSpawner("{}", () => {
+        statusReads += 1;
+      }),
+    );
+  });
 
   it.effect("keeps a Tailscale Serve change made while a mode change is saving", () =>
     Effect.gen(function* () {

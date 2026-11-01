@@ -110,7 +110,7 @@ another link to share.
 ### Reach one machine several ways
 
 A machine can have more than one route: LAN, Tailscale, another VPN, a public
-URL, SSH, or T3 Connect. Tailscale shares its `100.64.0.0/10` address range with
+URL such as a dev tunnel, SSH, or T3 Connect. Tailscale shares its `100.64.0.0/10` address range with
 other VPNs such as Cloudflare WARP, so an address in that range shows as VPN
 unless the machine confirms it is on Tailscale. To add a route, choose **Add
 route** in the machine's route list, or next to it in the T3 Connect list.
@@ -194,6 +194,45 @@ tailscale serve --https=443 off
 
 If that port is already in use, choose another with
 `--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
+
+### Microsoft dev tunnel
+
+A dev tunnel gives the machine a public HTTPS address, such as
+`https://abc123-3773.usw2.devtunnels.ms/`, that phones, browsers, and
+app.t3.codes can reach from any network. Every device still has to pair; the
+tunnel only carries the connection.
+
+Install the [devtunnel CLI](https://learn.microsoft.com/azure/developer/dev-tunnels/get-started)
+on the host and sign in once:
+
+```bash
+devtunnel user login -g
+```
+
+In the desktop app, enable **Dev tunnel** in **Settings → Sharing & access**.
+To start a command-line server with one:
+
+```bash
+t3 serve --devtunnel
+```
+
+For the [background service](./background-service.md#configure-the-service-environment),
+add `T3CODE_DEVTUNNEL=1` to `service.env`. Then pair a device through the
+tunnel:
+
+```bash
+t3 pair --devtunnel
+```
+
+T3 Code reuses the same tunnel across restarts, so the address stays the same
+as long as the server's port does. Devices paired another way learn the tunnel
+address on their own. The first time a browser opens the address, Microsoft
+shows a notice about dev tunnels; choose **Continue**.
+
+The tunnel belongs to your dev tunnels account and appears in `devtunnel list`
+as "T3 Code on" your machine's name. To remove it, stop the server and run
+`devtunnel delete <tunnel-id>`. Dev tunnels has monthly bandwidth limits; see
+Microsoft's [dev tunnels limits](https://aka.ms/devtunnels/limits).
 
 ### Hosted web app
 

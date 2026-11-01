@@ -208,6 +208,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
           setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
           setServerExposureMode: () => Effect.die("unexpected server exposure update"),
           setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
+          setDevTunnelEnabled: () => Effect.die("unexpected dev tunnel update"),
           setUpdateChannel: (channel) =>
             setUpdateChannelError
               ? Effect.fail(setUpdateChannelError)

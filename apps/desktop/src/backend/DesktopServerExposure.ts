@@ -14,6 +14,7 @@ import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -24,7 +25,12 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopNetworkInterfaces from "./DesktopNetworkInterfaces.ts";
+import {
+  DEVTUNNEL_STATE_FILE,
+  resolveDevTunnelAdvertisedEndpoints,
+} from "./devTunnelEndpointProvider.ts";
 import { resolveTailscaleAdvertisedEndpoints } from "./tailscaleEndpointProvider.ts";
 
 const TAILSCALE_STATUS_CACHE_TTL = Duration.seconds(60);
@@ -250,10 +256,23 @@ export const DesktopServerExposureSetModeError = Schema.Union([
 ]);
 export type DesktopServerExposureSetModeError = typeof DesktopServerExposureSetModeError.Type;
 
+export class DesktopDevTunnelPersistenceError extends Schema.TaggedError<DesktopDevTunnelPersistenceError>()(
+  "DesktopDevTunnelPersistenceError",
+  {
+    enabled: Schema.Boolean,
+    cause: Schema.instanceOf(DesktopAppSettings.DesktopSettingsWriteError),
+  },
+) {
+  override get message(): string {
+    return `Failed to persist desktop dev tunnel setting (enabled: ${this.enabled}).`;
+  }
+}
+
 export const DesktopServerExposureError = Schema.Union([
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
   DesktopTailscaleServePersistenceError,
+  DesktopDevTunnelPersistenceError,
 ]);
 export type DesktopServerExposureError = typeof DesktopServerExposureError.Type;
 
@@ -263,6 +282,7 @@ export interface DesktopServerExposureBackendConfig {
   readonly httpBaseUrl: URL;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly devTunnelEnabled: boolean;
 }
 
 export interface DesktopServerExposureChange {
@@ -285,6 +305,9 @@ export class DesktopServerExposure extends Context.Service<
       readonly enabled: boolean;
       readonly port?: number;
     }) => Effect.Effect<DesktopServerExposureChange, DesktopTailscaleServePersistenceError>;
+    readonly setDevTunnelEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopServerExposureChange, DesktopDevTunnelPersistenceError>;
     readonly getAdvertisedEndpoints: Effect.Effect<readonly AdvertisedEndpoint[]>;
   }
 >()("@t3tools/desktop/backend/DesktopServerExposure") {}
@@ -301,6 +324,7 @@ interface RuntimeState {
   readonly advertisedHost: Option.Option<string>;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly devTunnelEnabled: boolean;
 }
 
 interface ResolvedRuntimeState {
@@ -326,6 +350,7 @@ const toContractState = (state: RuntimeState): DesktopServerExposureState => ({
   advertisedHost: Option.getOrNull(state.advertisedHost),
   tailscaleServeEnabled: state.tailscaleServeEnabled,
   tailscaleServePort: state.tailscaleServePort,
+  devTunnelEnabled: state.devTunnelEnabled,
 });
 
 const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfig => ({
@@ -334,6 +359,7 @@ const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfi
   httpBaseUrl: state.httpBaseUrl,
   tailscaleServeEnabled: state.tailscaleServeEnabled,
   tailscaleServePort: state.tailscaleServePort,
+  devTunnelEnabled: state.devTunnelEnabled,
 });
 
 const toResolvedExposure = (state: RuntimeState): ResolvedDesktopServerExposure => ({
@@ -363,6 +389,7 @@ function runtimeStateFromResolvedExposure(input: {
     advertisedHost: Option.fromNullishOr(input.exposure.advertisedHost),
     tailscaleServeEnabled: input.settings.tailscaleServeEnabled,
     tailscaleServePort: input.settings.tailscaleServePort,
+    devTunnelEnabled: input.settings.devTunnelEnabled,
   };
 }
 
@@ -460,6 +487,8 @@ const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): bo
 /** @public */
 export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
   const networkInterfaces = yield* DesktopNetworkInterfaces.DesktopNetworkInterfaces;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
@@ -588,6 +617,27 @@ export const make = Effect.gen(function* () {
     changePermit.withPermit,
   );
 
+  const setDevTunnelEnabled = Effect.fn("desktop.serverExposure.setDevTunnelEnabled")(function* (
+    enabled: boolean,
+  ) {
+    yield* Effect.annotateCurrentSpan({ enabled });
+    const result = yield* desktopSettings
+      .setDevTunnelEnabled(enabled)
+      .pipe(Effect.mapError((cause) => new DesktopDevTunnelPersistenceError({ enabled, cause })));
+
+    const nextState = yield* Ref.updateAndGet(stateRef, (current) => ({
+      ...current,
+      devTunnelEnabled: result.settings.devTunnelEnabled,
+    }));
+
+    return {
+      state: toContractState(nextState),
+      requiresRelaunch: result.changed,
+    };
+  }, changePermit.withPermit);
+
+  const devTunnelStatePath = environment.path.join(environment.stateDir, DEVTUNNEL_STATE_FILE);
+
   const getAdvertisedEndpoints = Effect.gen(function* () {
     const currentNetworkInterfaces = yield* readNetworkInterfaces;
     const state = yield* readCurrentState(currentNetworkInterfaces);
@@ -596,10 +646,15 @@ export const make = Effect.gen(function* () {
       exposure: toResolvedExposure(state),
       customHttpsEndpointUrls: config.desktopHttpsEndpointUrls,
     });
+    const devTunnelEndpoints = state.devTunnelEnabled
+      ? yield* resolveDevTunnelAdvertisedEndpoints(devTunnelStatePath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+        )
+      : [];
 
     // Spawning Mac App Store Tailscale can prompt for TCC access even when exposure is disabled.
     if (state.mode !== "network-accessible" && !state.tailscaleServeEnabled) {
-      return coreEndpoints;
+      return [...coreEndpoints, ...devTunnelEndpoints];
     }
 
     const tailscaleEndpoints = yield* resolveTailscaleAdvertisedEndpoints({
@@ -615,7 +670,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
       Effect.provideService(HttpClient.HttpClient, httpClient),
     );
-    return [...coreEndpoints, ...tailscaleEndpoints];
+    return [...coreEndpoints, ...tailscaleEndpoints, ...devTunnelEndpoints];
   }).pipe(Effect.withSpan("desktop.serverExposure.getAdvertisedEndpoints"));
 
   return DesktopServerExposure.of({
@@ -624,6 +679,7 @@ export const make = Effect.gen(function* () {
     configureFromSettings,
     setMode,
     setTailscaleServeEnabled,
+    setDevTunnelEnabled,
     getAdvertisedEndpoints,
   });
 });

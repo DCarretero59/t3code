@@ -27,8 +27,8 @@ Providers enforce permissions differently. Some read-only actions can proceed in
 including OpenCode and Antigravity, fall back to asking. On Grok, commands its review blocks come
 to you for approval. On fx, prompts it still sends also come to you.
 
-Muse Code offers only **Supervised** and **Full access**. A Muse thread already set to another mode
-runs in **Supervised**.
+Muse Code and GitHub Copilot offer only **Supervised** and **Full access**. A thread on either already
+set to another mode runs in **Supervised**.
 
 T3 Code offers no **Auto-accept edits** or **Full access** for fx. An fx thread already set to either runs in
 **Supervised**.

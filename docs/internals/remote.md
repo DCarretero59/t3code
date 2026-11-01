@@ -159,6 +159,15 @@ environment type. Authentication remains the environment's responsibility for
 every route. See [environment authentication](./environment-auth.md) and the
 [T3 Connect trust boundary](./t3-connect.md).
 
+A Microsoft dev tunnel is the same kind of route, so it is created with
+anonymous access and the environment authenticates every request. The tunnel's
+own access control cannot serve T3's clients: a browser cannot attach its token
+to a WebSocket, and its sign-in cookie is `SameSite=Lax`, which a hosted or
+cross-origin client never sends. The tunnel must keep the `Host` and `Origin`
+headers unchanged. Its default rewrites both to `localhost`, which would make a
+cross-site cookie request pass the server's browser-origin check
+([devtunnel wrapper](../../packages/devtunnel/src/devtunnel.ts)).
+
 SSH can launch a server as well as forward a port. Desktop main owns that
 lifecycle because it can spawn SSH and handle authentication prompts. The
 renderer uses the forwarded endpoint through the shared connection runtime.

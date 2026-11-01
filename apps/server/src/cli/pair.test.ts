@@ -418,6 +418,44 @@ describe("t3 pair", () => {
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("pairs through the dev tunnel the running server published", () =>
+    withDescriptorServer((origin) =>
+      Effect.gen(function* () {
+        const fetch = yield* FetchHttpClient.Fetch;
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-dt-test-"));
+        yield* persistServerRuntimeState({
+          path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+          state: yield* makePersistedServerRuntimeState({
+            config: { host: "127.0.0.1", devUrl: undefined },
+            port: Number(new URL(origin).port),
+          }),
+        });
+
+        const unpublished = yield* provideCliTestLayers(
+          runCli(["pair", "--base-dir", baseDir, "--devtunnel"]).pipe(Effect.flip),
+        );
+        assert.include(String(unpublished), "not publishing a dev tunnel");
+
+        const tunnelUrl = "https://3n8rj3rj-3773.usw3.devtunnels.ms/";
+        NodeFS.writeFileSync(
+          NodePath.join(baseDir, "userdata", "devtunnel.json"),
+          JSON.stringify({ tunnelId: "pair-test.usw3", url: tunnelUrl }),
+        );
+        const output = yield* captureStdout(
+          runCli(["pair", "--base-dir", baseDir, "--devtunnel"]).pipe(
+            Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
+              if (String(input).startsWith(origin)) return fetch(input, init);
+              assert.equal(String(input), `${tunnelUrl}.well-known/t3/environment`);
+              return Response.json(testDescriptor);
+            }),
+          ),
+        );
+
+        assert.include(output, `Pairing URL: ${tunnelUrl}pair#token=`);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
 
 describe("auth scope options", () => {

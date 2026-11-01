@@ -28,6 +28,7 @@ const DesktopSettingsPatch = Schema.Struct({
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
+  devTunnelEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   wslBackendEnabled: Schema.optionalKey(Schema.Boolean),
@@ -169,6 +170,7 @@ describe("DesktopSettings", () => {
             "serverExposureMode": "network-accessible",
             "tailscaleServeEnabled": true,
             "tailscaleServePort": 8443,
+            "devTunnelEnabled": true,
             "mainWindowBounds": { "x": 120, "y": 80, "width": 1280, "height": 900 },
           }\n`,
         );
@@ -181,6 +183,7 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
+          devTunnelEnabled: true,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
@@ -218,6 +221,7 @@ describe("DesktopSettings", () => {
 
         yield* settings.setMainWindowBounds({ x: -1200, y: 40, width: 1440, height: 960 }, true);
         yield* settings.setServerExposureMode("network-accessible");
+        yield* settings.setDevTunnelEnabled(true);
 
         const persisted = yield* decodeDesktopSettingsPatch(
           yield* fileSystem.readFileString(environment.desktopSettingsPath),
@@ -226,7 +230,16 @@ describe("DesktopSettings", () => {
           mainWindowBounds: { x: -1200, y: 40, width: 1440, height: 960 },
           mainWindowMaximized: true,
           serverExposureMode: "network-accessible",
+          devTunnelEnabled: true,
         } satisfies typeof DesktopSettingsPatch.Type);
+
+        yield* settings.setDevTunnelEnabled(false);
+        assert.notProperty(
+          yield* decodeDesktopSettingsPatch(
+            yield* fileSystem.readFileString(environment.desktopSettingsPath),
+          ),
+          "devTunnelEnabled",
+        );
       }),
     ),
   );
@@ -276,6 +289,7 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          devTunnelEnabled: false,
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
@@ -305,6 +319,7 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          devTunnelEnabled: false,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
           wslBackendEnabled: false,
