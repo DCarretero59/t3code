@@ -11,6 +11,7 @@ import {
   type OrchestrationV2ProviderTurnTokenUsage,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
+  type ProviderDriverKind,
   type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -25,6 +26,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
@@ -50,6 +52,7 @@ import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/sel
 
 import { CopilotSettings } from "../settings.ts";
 import { copilotRuntimeEnvironment } from "./environment.ts";
+import { copilotSessionControls, copilotSessionMode } from "./controls.ts";
 import {
   type CopilotPromptRequest,
   copilotApprovalPresentation,
@@ -62,11 +65,13 @@ import {
   type CopilotSdkConnection,
   type CopilotSdkRunner,
   type CopilotSdkSession,
+  type CopilotSessionControls,
   type CopilotSdkSessionOptions,
   type CopilotSendAttachment,
   type CopilotUserInputRequest,
   type CopilotUserInputResponse,
   makeCopilotSdkRunner,
+  isCopilotReasoningEffort,
 } from "./sdk.ts";
 import { COPILOT_DEFAULT_MODEL, COPILOT_REASONING_EFFORT_OPTION } from "./status.ts";
 import { copilotToolTurnItemFields, isCopilotShellTool, isHiddenCopilotTool } from "./tools.ts";
@@ -174,17 +179,16 @@ const CopilotProviderCapabilitiesV2 = {
 } satisfies OrchestrationV2ProviderCapabilities;
 
 interface CopilotAdapterV2Options {
+  readonly identity?: CopilotAdapterIdentity;
   readonly instanceId: ProviderInstanceId;
   readonly settings: CopilotSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly runner: CopilotSdkRunner;
 }
 
-function providerRef(
-  nativeId: string,
-  strength: "strong" | "weak" = "strong",
-): OrchestrationV2ProviderRef {
-  return { driver: COPILOT_PROVIDER, nativeId, strength };
+export interface CopilotAdapterIdentity {
+  readonly driverKind: ProviderDriverKind;
+  readonly nativeThreadIdPrefix: string;
 }
 
 /** T3's thread MCP server, over HTTP; Copilot keeps the session running when it is unreachable. */
@@ -249,30 +253,45 @@ function numberField(value: unknown, key: string): number | undefined {
   return typeof field === "number" && Number.isFinite(field) ? field : undefined;
 }
 
-const REASONING_EFFORTS: ReadonlySet<string> = new Set([
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
-
-function isReasoningEffort(value: string | undefined): value is CopilotReasoningEffort {
-  return value !== undefined && REASONING_EFFORTS.has(value);
-}
-
 interface CopilotModelChoice {
   readonly model: string;
   readonly reasoningEffort?: CopilotReasoningEffort;
 }
 
 function modelChoice(selection: ModelSelection): CopilotModelChoice {
-  const effort = getModelSelectionStringOptionValue(selection, COPILOT_REASONING_EFFORT_OPTION);
+  const effort =
+    getModelSelectionStringOptionValue(selection, COPILOT_REASONING_EFFORT_OPTION) ??
+    getModelSelectionStringOptionValue(selection, "reasoning_effort");
   return {
     model: selection.model.trim() || COPILOT_DEFAULT_MODEL,
-    ...(isReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
+    ...(isCopilotReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
   };
+}
+
+function unsupportedSelectionOption(selection: ModelSelection): string | undefined {
+  for (const option of selection.options ?? []) {
+    switch (option.id) {
+      case COPILOT_REASONING_EFFORT_OPTION:
+      case "reasoning_effort":
+        if (typeof option.value !== "string" || !isCopilotReasoningEffort(option.value))
+          return option.id;
+        break;
+      case "mode":
+        if (typeof option.value !== "string" || copilotSessionMode(option.value) === undefined) {
+          return option.id;
+        }
+        break;
+      case "agent":
+        if (typeof option.value !== "string") return option.id;
+        break;
+      case "allow_all":
+        if (option.value !== "on" && option.value !== "off") return option.id;
+        break;
+      default:
+        return option.id;
+    }
+  }
+  return undefined;
 }
 
 interface StreamItem {
@@ -332,6 +351,7 @@ interface BoundSession {
   providerThread: OrchestrationV2ProviderThread;
   activeTurn: ActiveTurn | null;
   applied: CopilotModelChoice;
+  controls: CopilotSessionControls;
   readonly approveAll: boolean;
 }
 
@@ -348,6 +368,12 @@ type InboxItem =
 const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
   options: CopilotAdapterV2Options,
 ) {
+  const COPILOT_PROVIDER = options.identity?.driverKind ?? COPILOT_DRIVER_KIND;
+  const nativeThreadIdPrefix = options.identity?.nativeThreadIdPrefix ?? "";
+  const providerRef = (
+    nativeId: string,
+    strength: "strong" | "weak" = "strong",
+  ): OrchestrationV2ProviderRef => ({ driver: COPILOT_PROVIDER, nativeId, strength });
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
@@ -371,13 +397,24 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
     openSession: Effect.fn("CopilotAdapterV2.openSession")(function* (
       input: ProviderAdapter.ProviderAdapterV2OpenSessionInput,
     ) {
+      const unsupported = unsupportedSelectionOption(input.modelSelection);
+      if (unsupported !== undefined) {
+        return yield* new ProviderAdapter.ProviderAdapterOpenSessionError({
+          driver: COPILOT_PROVIDER,
+          providerSessionId: input.providerSessionId,
+          cause: new Error(`Copilot SDK does not support the '${unsupported}' selection.`),
+        });
+      }
       const scope = yield* Effect.scope;
       const cwd = input.runtimePolicy.cwd ?? host.paths.cwd;
       const mcpSession = yield* mcpSessions.read(input.threadId);
-      const approveAll =
+      const permitsFullAccess =
         input.runtimePolicy.runtimeMode === "full-access" &&
         input.runtimePolicy.approvalPolicy === undefined &&
         input.runtimePolicy.sandboxPolicy === undefined;
+      const approveAll =
+        permitsFullAccess &&
+        getModelSelectionStringOptionValue(input.modelSelection, "allow_all") !== "off";
       const connection: CopilotSdkConnection = yield* options.runner
         .connect({
           binaryPath: options.settings.binaryPath || "copilot",
@@ -1200,9 +1237,24 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
           },
         });
         owner.sdk = sdk;
+        yield* Scope.addFinalizer(scope, sdk.disconnect);
+        const controls = copilotSessionControls(
+          open.modelSelection,
+          input.runtimePolicy.interactionMode,
+        );
+        if (
+          options.identity !== undefined ||
+          controls.mode !== "interactive" ||
+          getModelSelectionStringOptionValue(open.modelSelection, "agent") !== undefined
+        ) {
+          yield* sdk.setControls(controls);
+          if (controls.mode !== "interactive" || controls.agent !== null) {
+            yield* sdk.setModel(choice);
+          }
+        }
         for (const item of pendingItems.splice(0))
           Queue.offerUnsafe(inbox, { ...item, owner: sdk });
-        return { sdk, applied: choice };
+        return { sdk, applied: choice, controls };
       });
 
       const bindThread = Effect.fnUntraced(function* (threadInput: {
@@ -1216,9 +1268,16 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
             "Cannot switch GitHub Copilot sessions while a turn is active",
           );
         }
-        const existingNativeId = threadInput.forceNew
+        const persistedNativeId = threadInput.forceNew
           ? undefined
           : (threadInput.existing?.nativeThreadRef?.nativeId ?? undefined);
+        if (
+          persistedNativeId !== undefined &&
+          !persistedNativeId.startsWith(nativeThreadIdPrefix)
+        ) {
+          return yield* protocolError("Cannot resume an ACP session through the Copilot SDK");
+        }
+        const existingNativeId = persistedNativeId?.slice(nativeThreadIdPrefix.length);
         if (
           bound !== null &&
           existingNativeId !== undefined &&
@@ -1252,7 +1311,7 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
             operation: "create",
             modelSelection: threadInput.modelSelection,
           }));
-        const nativeId = opened.sdk.sessionId;
+        const nativeId = `${nativeThreadIdPrefix}${opened.sdk.sessionId}`;
         const createdAt = yield* DateTime.now;
         const existing = threadInput.existing;
         const providerThread: OrchestrationV2ProviderThread =
@@ -1294,6 +1353,7 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
           activeTurn: null,
           applied: opened.applied,
           approveAll,
+          controls: opened.controls,
         };
         yield* emit({
           type: "provider_thread.updated",
@@ -1306,9 +1366,35 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
       const applySelection = Effect.fnUntraced(function* (
         session: BoundSession,
         selection: ModelSelection,
+        interactionMode: ProviderAdapter.ProviderAdapterV2OpenSessionInput["runtimePolicy"]["interactionMode"],
       ) {
+        const unsupported = unsupportedSelectionOption(selection);
+        if (unsupported !== undefined) {
+          return yield* protocolError(
+            `Copilot SDK does not support the '${unsupported}' selection.`,
+          );
+        }
+        if (options.identity !== undefined) {
+          if (
+            permitsFullAccess &&
+            (getModelSelectionStringOptionValue(selection, "allow_all") !== "off") !==
+              (getModelSelectionStringOptionValue(input.modelSelection, "allow_all") !== "off")
+          ) {
+            return yield* protocolError(
+              "Start a new thread to change Copilot SDK approval settings.",
+            );
+          }
+        }
         const choice = modelChoice(selection);
+        const controls = copilotSessionControls(selection, interactionMode);
+        const controlsChanged =
+          controls.mode !== session.controls.mode || controls.agent !== session.controls.agent;
+        if (controlsChanged) {
+          yield* session.sdk.setControls(controls);
+          session.controls = controls;
+        }
         if (
+          !controlsChanged &&
           choice.model === session.applied.model &&
           choice.reasoningEffort === session.applied.reasoningEffort
         ) {
@@ -1401,7 +1487,11 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
             ) {
               return yield* protocolError("GitHub Copilot turn requested for a different session");
             }
-            yield* applySelection(session, turnInput.modelSelection);
+            yield* applySelection(
+              session,
+              turnInput.modelSelection,
+              turnInput.runtimePolicy.interactionMode,
+            );
             const payload = yield* promptPayload(turnInput.message);
             const startedAt = yield* DateTime.now;
             const syntheticNativeTurnId = `${session.providerThread.id}:attempt:${turnInput.attemptId}`;
@@ -1693,15 +1783,17 @@ export type CopilotAdapterV2DriverEnv =
 /** `runner` replaces the SDK boundary for replay fixtures and the fixture recorder. */
 export function makeCopilotAdapterV2Driver(
   runner?: CopilotSdkRunner,
+  identity?: CopilotAdapterIdentity,
 ): ProviderAdapterDriver<CopilotSettings, CopilotAdapterV2DriverEnv> {
   return {
-    driverKind: COPILOT_DRIVER_KIND,
+    driverKind: identity?.driverKind ?? COPILOT_DRIVER_KIND,
     configSchema: CopilotSettings,
     defaultConfig: (): CopilotSettings => DEFAULT_COPILOT_SETTINGS,
     create: Effect.fn("CopilotAdapterV2Driver.create")(
       function* (input: ProviderAdapterDriverCreateInput<CopilotSettings>) {
         const hostEnvironment = yield* HostProcess.Environment;
         return yield* makeCopilotAdapterV2({
+          ...(identity === undefined ? {} : { identity }),
           instanceId: input.instanceId,
           settings: { ...input.config, enabled: input.enabled },
           environment: yield* mergeProviderInstanceEnvironment(
@@ -1716,7 +1808,7 @@ export function makeCopilotAdapterV2Driver(
           Effect.mapError(
             (cause) =>
               new ProviderAdapterDriverCreateError({
-                driver: COPILOT_DRIVER_KIND,
+                driver: identity?.driverKind ?? COPILOT_DRIVER_KIND,
                 instanceId: input.instanceId,
                 detail: "Failed to create GitHub Copilot adapter.",
                 cause,

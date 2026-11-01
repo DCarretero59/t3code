@@ -1,7 +1,5 @@
-import {
-  AcpRegistryDriver,
-  type AcpRegistryDriverEnv,
-} from "@t3tools/provider-acp-registry/server";
+import type { AcpRegistryDriverEnv } from "@t3tools/provider-acp-registry/server";
+import { CopilotAcpCompatibilityDriver } from "./CopilotAcpCompatibility.ts";
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
@@ -41,7 +39,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   PiDriver,
   MuseDriver,
   CopilotDriver,
-  AcpRegistryDriver,
+  CopilotAcpCompatibilityDriver,
 ];
 
 export type BuiltInUsageReadersEnv =

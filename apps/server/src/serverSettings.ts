@@ -22,6 +22,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -218,6 +219,9 @@ export class ServerSettingsService extends Context.Service<
 const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   overrides: DeepPartial<ServerSettings> = {},
 ) {
+  const copilotSdkCompatibility = yield* readCopilotSdkCompatibility("test settings");
+  const resolveTextGeneration = (settings: ServerSettings) =>
+    resolveTextGenerationProvider(settings, copilotSdkCompatibility);
   const { automaticGitFetchInterval, providerHealthRefreshInterval, ...overridesForMerge } =
     overrides;
   const merged = deepMerge(DEFAULT_SERVER_SETTINGS, overridesForMerge);
@@ -232,7 +236,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   });
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
   const writeSemaphore = yield* Semaphore.make(1);
-  const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
+  const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGeneration));
 
   const updateTestSettings = (
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
@@ -242,7 +246,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
         Effect.flatMap(update),
         Effect.flatMap(normalizeServerSettings),
         Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-        Effect.map(resolveTextGenerationProvider),
+        Effect.map(resolveTextGeneration),
       ),
     );
 
@@ -420,16 +424,47 @@ function migrateLegacyProviderSettings(
 
 const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
 
+const readCopilotSdkCompatibility = (settingsPath: string) =>
+  Config.Boolean("T3CODE_COPILOT_SDK_COMPAT").pipe(
+    Config.withDefault(false),
+    Effect.mapError(
+      (cause) =>
+        new ServerSettingsError({
+          settingsPath,
+          operation: "normalize",
+          cause,
+        }),
+    ),
+  );
+
 function selectionSupportsTextGeneration(
   settings: ServerSettings,
   selection: ModelSelection,
+  copilotSdkCompatibility: boolean,
 ): boolean {
-  return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
+  const instance = settings.providerInstances[selection.instanceId];
+  return (
+    instance?.driver !== ACP_REGISTRY_DRIVER ||
+    (copilotSdkCompatibility &&
+      Schema.is(
+        Schema.Struct({
+          source: Schema.optional(Schema.Literal("registry")),
+          agentId: Schema.Literal("github-copilot-cli"),
+        }),
+      )(instance.config))
+  );
 }
 
-function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
+function resolveTextGenerationProvider(
+  settings: ServerSettings,
+  copilotSdkCompatibility: boolean,
+): ServerSettings {
   return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection) &&
-    selectionSupportsTextGeneration(settings, settings.textGenerationModelSelection)
+    selectionSupportsTextGeneration(
+      settings,
+      settings.textGenerationModelSelection,
+      copilotSdkCompatibility,
+    )
     ? settings
     : fallbackTextGenerationProvider(settings);
 }
@@ -572,6 +607,9 @@ function foldLegacyProjectSettings(
 
 const make = Effect.gen(function* () {
   const { settingsPath } = yield* ServerConfig.ServerConfig;
+  const copilotSdkCompatibility = yield* readCopilotSdkCompatibility(settingsPath);
+  const resolveTextGeneration = (settings: ServerSettings) =>
+    resolveTextGenerationProvider(settings, copilotSdkCompatibility);
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -866,7 +904,7 @@ const make = Effect.gen(function* () {
       if (materialized?.source === source) return Effect.succeed(materialized.value);
       const generation = secretWriteGeneration;
       return materializeSettingsSecrets(source).pipe(
-        Effect.map(resolveTextGenerationProvider),
+        Effect.map(resolveTextGeneration),
         Effect.tap((value) =>
           Effect.sync(() => {
             if (generation === secretWriteGeneration) materialized = { source, value };
@@ -890,7 +928,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       ),
-      Stream.map(resolveTextGenerationProvider),
+      Stream.map(resolveTextGeneration),
     );
 
   type SecretChange = {
@@ -1069,7 +1107,7 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.ensuring(invalidateMaterialized)),
         );
         yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
-        const resolved = resolveTextGenerationProvider(materializedNext);
+        const resolved = resolveTextGeneration(materializedNext);
         materialized = { source: next, value: resolved };
         yield* emitChange(next);
         return resolved;

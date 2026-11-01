@@ -347,6 +347,11 @@ function makeReplayRunner(controller: CopilotReplayController): CopilotSdkRunner
                 controller
                   .call("permission.respond", { type: "permission.respond", ...response })
                   .pipe(Effect.asVoid),
+              getControls: Effect.die("Replay fixtures do not discover workspace controls."),
+              setControls: (controls) =>
+                controller
+                  .call("session.setControls", { type: "session.setControls", controls })
+                  .pipe(Effect.asVoid),
               disconnect: Effect.void,
             } satisfies CopilotSdkSession;
           }),

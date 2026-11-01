@@ -13,6 +13,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -33,6 +34,46 @@ import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.t
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
+
+it.effect.each([
+  [false, "github-copilot-cli", "registry", false],
+  [true, "github-copilot-cli", "registry", true],
+  [true, "github-copilot-cli", undefined, true],
+  [true, "github-copilot-cli", "custom", false],
+  [true, "another-agent", "registry", false],
+] as const)(
+  "only retains ACP Copilot as the text generator when SDK compatibility is enabled: %j",
+  ([enabled, agentId, source, retained]) =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const selected = (yield* settings.getSettings).textGenerationModelSelection;
+      assert.equal(selected.instanceId === "acpRegistry_copilot", retained);
+    }).pipe(
+      Effect.provide(
+        ServerSettingsModule.layerTest({
+          providerInstances: {
+            [ProviderInstanceId.make("acpRegistry_copilot")]: {
+              driver: ProviderDriverKind.make("acpRegistry"),
+              enabled: true,
+              config: { ...(source === undefined ? {} : { source }), agentId },
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: ProviderInstanceId.make("acpRegistry_copilot"),
+            model: "gpt-6-luna",
+          },
+        }).pipe(
+          Layer.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({
+                T3CODE_COPILOT_SDK_COMPAT: enabled,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+);
 
 const layerServerSettings = () =>
   ServerSettingsModule.layer.pipe(
