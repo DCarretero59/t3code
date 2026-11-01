@@ -51,6 +51,7 @@ import { assertGrokPromptErrorOutput } from "./grok_prompt_error/output.ts";
 import { grokSubagentLineageInput } from "./grok_subagent_lineage/input.ts";
 import { assertGrokSubagentLineageOutput } from "./grok_subagent_lineage/output.ts";
 import { assertClaudeMessageSteeringOutput } from "./message_steering/claude_output.ts";
+import { assertCopilotMessageSteeringOutput } from "./message_steering/copilot_output.ts";
 import { assertMessageSteeringOutput } from "./message_steering/codex_output.ts";
 import { assertCursorMessageSteeringOutput } from "./message_steering/cursor_output.ts";
 import { assertGrokMessageSteeringOutput } from "./message_steering/grok_output.ts";
@@ -70,6 +71,7 @@ import { assertMuseTurnInterruptOutput } from "./turn_interrupt/muse_output.ts";
 import { piCompactionInput } from "./pi_compaction/input.ts";
 import { assertPiCompactionOutput } from "./pi_compaction/output.ts";
 import { providerThreadResumeInput } from "./provider_thread_resume/input.ts";
+import { assertCopilotProviderThreadResumeOutput } from "./provider_thread_resume/copilot_output.ts";
 import { assertPiProviderThreadResumeOutput } from "./provider_thread_resume/pi_output.ts";
 import { assertMultiTurnClaudeOutput } from "./multi_turn/claude_output.ts";
 import { assertMultiTurnOutput } from "./multi_turn/codex_output.ts";
@@ -210,6 +212,7 @@ import {
   ACP_REGISTRY_MODEL_SELECTION,
   CLAUDE_MODEL_SELECTION,
   CODEX_MODEL_SELECTION,
+  COPILOT_MODEL_SELECTION,
   CURSOR_MODEL_SELECTION,
   FX_MODEL_SELECTION,
   GROK_MODEL_SELECTION,
@@ -622,6 +625,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     buildInput: simpleInput,
     providers: [
       {
+        driver: ProviderDriverKind.make("copilot"),
+        transcriptFile: new URL("./simple/copilot_transcript.ndjson", import.meta.url),
+        modelSelection: COPILOT_MODEL_SELECTION,
+        assertOutput: assertSimpleOutput,
+      },
+      {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./simple/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
@@ -693,6 +702,17 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     name: "tool_call_denied_write",
     buildInput: toolCallDeniedWriteInput,
     providers: [
+      {
+        driver: ProviderDriverKind.make("copilot"),
+        transcriptFile: new URL(
+          "./tool_call_denied_write/copilot_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: COPILOT_MODEL_SELECTION,
+        runtimePolicyOverride: DENIED_WRITE_POLICY,
+        expectedAbsentWorkspacePaths: [TOOL_CALL_DENIED_WRITE_TARGET],
+        assertOutput: assertToolCallDeniedWriteFxOutput,
+      },
       {
         driver: ProviderDriverKind.make("claudeAgent"),
         transcriptFile: new URL(
@@ -1226,6 +1246,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     buildInput: multiTurnInput,
     providers: [
       {
+        driver: ProviderDriverKind.make("copilot"),
+        transcriptFile: new URL("./multi_turn/copilot_transcript.ndjson", import.meta.url),
+        modelSelection: COPILOT_MODEL_SELECTION,
+        assertOutput: assertMultiTurnOutput,
+      },
+      {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./multi_turn/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
@@ -1344,6 +1370,15 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     name: "provider_thread_resume",
     buildInput: providerThreadResumeInput,
     providers: [
+      {
+        driver: ProviderDriverKind.make("copilot"),
+        transcriptFile: new URL(
+          "./provider_thread_resume/copilot_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: COPILOT_MODEL_SELECTION,
+        assertOutput: assertCopilotProviderThreadResumeOutput,
+      },
       {
         driver: ProviderDriverKind.make("pi"),
         transcriptFile: new URL("./provider_thread_resume/pi_transcript.ndjson", import.meta.url),
@@ -1522,6 +1557,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     buildInput: messageSteeringInput,
     providers: [
       {
+        driver: ProviderDriverKind.make("copilot"),
+        transcriptFile: new URL("./message_steering/copilot_transcript.ndjson", import.meta.url),
+        modelSelection: COPILOT_MODEL_SELECTION,
+        assertOutput: assertCopilotMessageSteeringOutput,
+      },
+      {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./message_steering/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
@@ -1569,6 +1610,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     name: "turn_interrupt",
     buildInput: turnInterruptInput,
     providers: [
+      {
+        driver: ProviderDriverKind.make("copilot"),
+        transcriptFile: new URL("./turn_interrupt/copilot_transcript.ndjson", import.meta.url),
+        modelSelection: COPILOT_MODEL_SELECTION,
+        assertOutput: assertTurnInterruptOutput,
+      },
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./turn_interrupt/codex_transcript.ndjson", import.meta.url),

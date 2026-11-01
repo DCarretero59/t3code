@@ -23,6 +23,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Command, Flag, GlobalFlag } from "effect/cli";
@@ -30,6 +31,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } fr
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
+import { DEVTUNNEL_STATE_FILE, readDevTunnelState } from "../environment/DevTunnel.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import {
   type PersistedServerRuntimeState,
@@ -155,6 +157,33 @@ export class DevServerNotProxiableError extends Schema.TaggedError<DevServerNotP
 ) {
   override get message(): string {
     return `Tailscale Serve can only proxy plain-HTTP local targets, and this dev server runs at ${this.devUrl}. Pair without --tailscale instead.`;
+  }
+}
+
+export class DevTunnelNotPublishedError extends Schema.TaggedError<DevTunnelNotPublishedError>()(
+  "DevTunnelNotPublishedError",
+  {},
+) {
+  override get message(): string {
+    return "This server is not publishing a dev tunnel. Sign in with `devtunnel user login -g`, start the server with `npx t3 serve --devtunnel` (or T3CODE_DEVTUNNEL=1), then run this command again.";
+  }
+}
+
+export class DevTunnelUnreachableError extends Schema.TaggedError<DevTunnelUnreachableError>()(
+  "DevTunnelUnreachableError",
+  { url: Schema.String },
+) {
+  override get message(): string {
+    return `The dev tunnel ${this.url} did not answer as this server. Check the server log for "Dev tunnel" messages.`;
+  }
+}
+
+export class ConflictingPairRouteError extends Schema.TaggedError<ConflictingPairRouteError>()(
+  "ConflictingPairRouteError",
+  {},
+) {
+  override get message(): string {
+    return "Pass either --tailscale or --devtunnel, not both.";
   }
 }
 
@@ -421,6 +450,36 @@ const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase"
   },
 );
 
+/** The running server owns the tunnel; pairing only reads where it published it. */
+const resolveDevTunnelPairingBase = Effect.fn("pair.resolveDevTunnelPairingBase")(function* (
+  target: DiscoveredPairTarget,
+) {
+  const path = yield* Path.Path;
+  const { stateDir } = yield* ServerConfig.deriveServerPaths(
+    target.baseDir,
+    target.variant === "dev" ? DEV_VARIANT_PLACEHOLDER_URL : undefined,
+    {},
+  );
+  const state = yield* readDevTunnelState(path.join(stateDir, DEVTUNNEL_STATE_FILE));
+  const url = Option.flatMap(state, (published) => Option.fromUndefinedOr(published.url));
+  if (Option.isNone(url)) {
+    return yield* new DevTunnelNotPublishedError();
+  }
+  const probed = yield* probeEnvironmentDescriptor(url.value);
+  if (
+    probed._tag !== "descriptor" ||
+    probed.descriptor.environmentId !== target.descriptor.environmentId
+  ) {
+    return yield* new DevTunnelUnreachableError({ url: url.value });
+  }
+  return {
+    baseUrl: url.value,
+    notes: [
+      "A browser shows Microsoft's dev tunnel notice the first time it opens this URL; choose Continue.",
+    ],
+  };
+});
+
 const mintPairingLink = Effect.fn("pair.mintPairingLink")(function* (input: {
   readonly config: ServerConfig.ServerConfig["Service"];
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
@@ -471,6 +530,13 @@ const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
   Flag.withDefault(DEFAULT_TAILSCALE_SERVE_PORT),
 );
 
+const devTunnelFlag = Flag.Boolean("devtunnel").pipe(
+  Flag.withDescription(
+    "Pair through the dev tunnel the running server publishes (started with --devtunnel).",
+  ),
+  Flag.withDefault(false),
+);
+
 export const pairCommand = Command.make("pair", {
   baseDir: baseDirFlag,
   scopes: authScopesFlag(AuthStandardClientScopes),
@@ -478,6 +544,7 @@ export const pairCommand = Command.make("pair", {
   label: labelFlag,
   tailscale: tailscaleFlag,
   tailscaleServePort: tailscaleServePortFlag,
+  devtunnel: devTunnelFlag,
 }).pipe(
   Command.withDescription(
     "Mint a pairing token for a running T3 Code server and print it as a QR code.",
@@ -486,6 +553,9 @@ export const pairCommand = Command.make("pair", {
     Effect.gen(function* () {
       const cliLogLevel = yield* GlobalFlag.LogLevel;
       const logLevel = Option.getOrElse(cliLogLevel, () => "Warn" as const);
+      if (flags.tailscale && flags.devtunnel) {
+        return yield* new ConflictingPairRouteError();
+      }
 
       const target = yield* discoverPairTarget(Option.getOrUndefined(flags.baseDir));
       // Each protocol keeps auth in its own database, so a token minted here
@@ -508,15 +578,19 @@ export const pairCommand = Command.make("pair", {
         });
         pairingBaseUrl = resolved.baseUrl;
         notes.push(...resolved.notes);
+      } else if (flags.devtunnel) {
+        const resolved = yield* resolveDevTunnelPairingBase(target);
+        pairingBaseUrl = resolved.baseUrl;
+        notes.push(...resolved.notes);
       } else {
         pairingBaseUrl = resolveDirectPairingBaseUrl(target.state);
         if (isLoopbackHost(new URL(pairingBaseUrl).hostname)) {
           notes.push(
-            "This URL is only reachable from this machine. Re-run with --tailscale, or restart the server with a reachable --host.",
+            "This URL is only reachable from this machine. Re-run with --tailscale or --devtunnel, or restart the server with a reachable --host.",
           );
         } else if (target.state.privateNetworkOnly) {
           notes.push(
-            "This URL works only from this machine's local network. From elsewhere, re-run with --tailscale or use T3 Connect.",
+            "This URL works only from this machine's local network. From elsewhere, re-run with --tailscale or --devtunnel.",
           );
         }
         if (target.variant === "dev" && target.state.devUrl === undefined) {

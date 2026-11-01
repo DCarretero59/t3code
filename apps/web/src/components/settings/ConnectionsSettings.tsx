@@ -117,6 +117,7 @@ import {
   toDesktopPairingLinkRecord,
   toDesktopClientSessionRecord,
   selectPairingEndpoint,
+  isDevTunnelEndpoint,
   isTailscaleHttpsEndpoint,
   endpointDefaultPreferenceKey,
 } from "./ConnectionsSettings.logic";
@@ -248,6 +249,8 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
     useState<EnvironmentId | null>(null);
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
+  const [isUpdatingDevTunnel, setIsUpdatingDevTunnel] = useState(false);
+  const [pendingDevTunnelEnabled, setPendingDevTunnelEnabled] = useState<boolean | null>(null);
   const [isUpdatingWslBackend, setIsUpdatingWslBackend] = useState(false);
   const [desktopWslMutationError, setDesktopWslMutationError] = useState<string | null>(null);
   type PendingWslChange =
@@ -467,6 +470,37 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
     setDisableTailscaleServeDialogOpen(true);
   };
 
+  const handleConfirmDevTunnelChange = async () => {
+    if (
+      pendingDevTunnelEnabled === null ||
+      !desktopBridge ||
+      primaryEnvironmentId === null ||
+      !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope)
+    )
+      return;
+    const enabled = pendingDevTunnelEnabled;
+    setIsUpdatingDevTunnel(true);
+    setDesktopServerExposureMutationError(null);
+    const settled = await settlePromise(async () => {
+      await desktopBridge.setDevTunnelEnabled(enabled);
+      refreshDesktopNetworkAccessState();
+    });
+    setPendingDevTunnelEnabled(null);
+    if (settled._tag === "Failure") {
+      const error = Cause.squash(settled.cause);
+      const message = error instanceof Error ? error.message : "Failed to update the dev tunnel.";
+      setDesktopServerExposureMutationError(message);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: enabled ? "Could not enable the dev tunnel" : "Could not disable the dev tunnel",
+          description: message,
+        }),
+      );
+    }
+    setIsUpdatingDevTunnel(false);
+  };
+
   const handleRevokeDesktopPairingLink = async (id: string) => {
     if (
       primaryEnvironmentId === null ||
@@ -610,22 +644,27 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
 
   const visibleDesktopPairingLinks = desktopPairingLinks;
   const tailscaleHttpsEndpoint = desktopAdvertisedEndpoints.find(isTailscaleHttpsEndpoint) ?? null;
+  const devTunnelEndpoint = desktopAdvertisedEndpoints.find(isDevTunnelEndpoint) ?? null;
   const visibleDesktopNetworkAdvertisedEndpoints = isLocalBackendNetworkAccessible
-    ? desktopAdvertisedEndpoints.filter((endpoint) => !isTailscaleHttpsEndpoint(endpoint))
+    ? desktopAdvertisedEndpoints.filter(
+        (endpoint) => !isTailscaleHttpsEndpoint(endpoint) && !isDevTunnelEndpoint(endpoint),
+      )
     : [];
-  const visibleDesktopAdvertisedEndpoints = tailscaleHttpsEndpoint
-    ? [...visibleDesktopNetworkAdvertisedEndpoints, tailscaleHttpsEndpoint]
-    : visibleDesktopNetworkAdvertisedEndpoints;
+  const desktopTunnelAdvertisedEndpoints = [
+    ...(tailscaleHttpsEndpoint ? [tailscaleHttpsEndpoint] : []),
+    ...(devTunnelEndpoint ? [devTunnelEndpoint] : []),
+  ];
+  const visibleDesktopAdvertisedEndpoints = [
+    ...visibleDesktopNetworkAdvertisedEndpoints,
+    ...desktopTunnelAdvertisedEndpoints,
+  ];
   const defaultDesktopNetworkAdvertisedEndpoint = selectPairingEndpoint(
     visibleDesktopNetworkAdvertisedEndpoints,
     defaultAdvertisedEndpointKey,
   );
   const defaultDesktopAdvertisedEndpoint =
     defaultDesktopNetworkAdvertisedEndpoint ??
-    selectPairingEndpoint(
-      tailscaleHttpsEndpoint ? [tailscaleHttpsEndpoint] : [],
-      defaultAdvertisedEndpointKey,
-    );
+    selectPairingEndpoint(desktopTunnelAdvertisedEndpoints, defaultAdvertisedEndpointKey);
   const defaultDesktopAdvertisedEndpointKey = defaultDesktopAdvertisedEndpoint
     ? endpointDefaultPreferenceKey(defaultDesktopAdvertisedEndpoint)
     : null;
@@ -930,6 +969,32 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
       }
     />
   );
+  const devTunnelLoginCommand = <code className="font-mono">devtunnel user login -g</code>;
+  const renderDevTunnelRow = () => (
+    <SettingsRow
+      title={searchableSetting("dev-tunnel").title}
+      description={
+        !desktopServerExposureState?.devTunnelEnabled ? (
+          <>
+            Publish this computer over a Microsoft dev tunnel so other devices can reach it from
+            anywhere. Requires the devtunnel CLI, signed in with {devTunnelLoginCommand}.
+          </>
+        ) : devTunnelEndpoint ? (
+          devTunnelEndpoint.httpBaseUrl
+        ) : (
+          <>Sign in with {devTunnelLoginCommand}; the tunnel URL appears once connected.</>
+        )
+      }
+      control={
+        <Switch
+          checked={desktopServerExposureState?.devTunnelEnabled === true}
+          disabled={!desktopServerExposureState || isUpdatingDevTunnel}
+          onCheckedChange={(checked) => setPendingDevTunnelEnabled(checked)}
+          aria-label="Enable dev tunnel"
+        />
+      }
+    />
+  );
   const renderAuthorizedClients = () => (
     <>
       {desktopAccessManagementError ? (
@@ -1115,6 +1180,7 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
                 {renderNetworkAccessRow()}
                 {renderEndpointRows()}
                 {renderTailscaleRow()}
+                {renderDevTunnelRow()}
                 {renderWslRow()}
                 {canReadRelay || canManageRelay ? (
                   <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
@@ -1374,6 +1440,53 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
                       <Spinner size="sm" />
                       Restarting…
                     </>
+                  ) : (
+                    "Restart and disable"
+                  )}
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogPopup>
+          </AlertDialog>
+          <AlertDialog
+            open={pendingDevTunnelEnabled !== null && canManageLocalBackend}
+            onOpenChange={(open) => {
+              if (!open && !isUpdatingDevTunnel) setPendingDevTunnelEnabled(null);
+            }}
+          >
+            <AlertDialogPopup>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {pendingDevTunnelEnabled ? "Enable dev tunnel?" : "Disable dev tunnel?"}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {pendingDevTunnelEnabled
+                    ? "T3 Code will restart the local backend and publish it over a Microsoft dev tunnel. Pair devices to give them access."
+                    : "Devices connected through the dev tunnel will disconnect. T3 Code will restart the local backend without it."}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogClose
+                  disabled={isUpdatingDevTunnel}
+                  render={<Button variant="outline" disabled={isUpdatingDevTunnel} />}
+                >
+                  Cancel
+                </AlertDialogClose>
+                <Button
+                  variant={pendingDevTunnelEnabled ? "default" : "destructive"}
+                  onClick={() => void handleConfirmDevTunnelChange()}
+                  disabled={
+                    isUpdatingDevTunnel ||
+                    pendingDevTunnelEnabled === null ||
+                    !canManageLocalBackend
+                  }
+                >
+                  {isUpdatingDevTunnel ? (
+                    <>
+                      <Spinner size="sm" />
+                      Restarting…
+                    </>
+                  ) : pendingDevTunnelEnabled ? (
+                    "Restart and enable"
                   ) : (
                     "Restart and disable"
                   )}

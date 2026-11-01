@@ -24,6 +24,7 @@ import {
   isWildcardHost,
   VIRTUAL_INTERFACE,
 } from "../startupAccess.ts";
+import * as DevTunnel from "./DevTunnel.ts";
 
 type NetworkInterfacesMap = ReturnType<typeof NodeOS.networkInterfaces>;
 
@@ -111,6 +112,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const devTunnel = yield* Effect.serviceOption(DevTunnel.DevTunnel);
   // Only the service default listens on every interface without being asked,
   // so only it checks once whether it runs in a cloud. The check starts now so
   // the first client does not wait for its timeout.
@@ -150,6 +152,13 @@ export const make = Effect.gen(function* () {
       );
       if (Option.isSome(servedUrl)) {
         endpoints.push({ kind: "tailnet", httpBaseUrl: servedUrl.value });
+      }
+    }
+    // Present only while this server's own host process reports the tunnel connected.
+    if (Option.isSome(devTunnel)) {
+      const tunnelUrl = yield* devTunnel.value.publicUrl;
+      if (Option.isSome(tunnelUrl)) {
+        endpoints.push({ kind: "devtunnel", httpBaseUrl: tunnelUrl.value });
       }
     }
     return endpoints;

@@ -49,6 +49,7 @@ const minimalDesktopFlags = (baseDir: string) => ({
   logWebSocketEvents: Option.none<boolean>(),
   tailscaleServeEnabled: Option.none<boolean>(),
   tailscaleServePort: Option.none<number>(),
+  devTunnelEnabled: Option.none(),
 });
 
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
@@ -231,6 +232,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: Option.none<boolean>(),
         tailscaleServeEnabled: Option.none<boolean>(),
         tailscaleServePort: Option.none<number>(),
+        devTunnelEnabled: Option.none(),
       };
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromEnv({
@@ -275,6 +277,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: Option.none<boolean>(),
         tailscaleServeEnabled: Option.none<boolean>(),
         tailscaleServePort: Option.none<number>(),
+        devTunnelEnabled: Option.none(),
       };
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromEnv({ env: { T3CODE_DEV_AUTH_TOKEN: secret } }),
@@ -330,6 +333,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.some(false),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          devTunnelEnabled: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -385,6 +389,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           desktopBootstrapToken: "desktop-token",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          devTunnelEnabled: false,
         }),
       );
       const derivedPaths = yield* deriveExplicitServerPaths(
@@ -406,6 +411,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          devTunnelEnabled: Option.none(),
         },
         Option.some("Debug"),
       ).pipe(
@@ -420,6 +426,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "true",
                   T3CODE_LOG_WS_EVENTS: "true",
+                  T3CODE_DEVTUNNEL: "true",
                 },
               }),
             ),
@@ -446,6 +453,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        devTunnelEnabled: true,
       });
     }),
   );
@@ -553,6 +561,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          devTunnelEnabled: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -601,6 +610,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          devTunnelEnabled: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -641,6 +651,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          devTunnelEnabled: Option.none(),
         },
         Option.none(),
         {
@@ -703,6 +714,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          devTunnelEnabled: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -742,6 +754,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     logWebSocketEvents: Option.none<boolean>(),
     tailscaleServeEnabled: Option.none<boolean>(),
     tailscaleServePort: Option.none<number>(),
+    devTunnelEnabled: Option.none(),
   });
 
   it.effect(

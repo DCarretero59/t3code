@@ -583,8 +583,11 @@ export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boole
   );
 }
 
-/** tailnet means this machine's Tailscale interface; other private addresses are lan. */
-export const ServerDirectEndpointKind = Schema.Literals(["lan", "tailnet"]);
+/**
+ * tailnet means this machine's Tailscale interface; other private addresses are lan.
+ * devtunnel is a public HTTPS Microsoft dev tunnel URL this server hosts.
+ */
+export const ServerDirectEndpointKind = Schema.Literals(["lan", "tailnet", "devtunnel"]);
 export type ServerDirectEndpointKind = typeof ServerDirectEndpointKind.Type;
 
 export const ServerDirectEndpoint = Schema.Struct({
